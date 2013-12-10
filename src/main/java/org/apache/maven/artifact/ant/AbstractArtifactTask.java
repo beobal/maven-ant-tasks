@@ -437,6 +437,12 @@ public abstract class AbstractArtifactTask
             if ( server != null )
             {
                 repository.addAuthentication( new Authentication( server ) );
+                WagonManager wagonManager = (WagonManager) lookup(WagonManager.ROLE );
+                wagonManager.addAuthenticationInfo(repository.getId(),
+                                                   server.getUsername(), 
+                                                   server.getPassword(),
+                                                   server.getPrivateKey(), 
+                                                   server.getPassphrase());
             }
         }
 
