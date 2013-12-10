@@ -1,0 +1,727 @@
+<project name="maven-ant-tasks" default="test-all" xmlns:artifact="urn:maven-artifact-ant" xmlns:test="urn:test-tasks">
+<!--
+<project name="foo" default="foo" xmlns:artifact="antlib:org.apache.maven.artifact.ant">
+-->
+  <!--
+    You either need to run the the 'initTaskDefs' task below and
+    define the artifact namespace like above (choose anything you
+    like except strings that start with 'antlib:'),
+    and be sure to supply the path to the maven-artifact-ant jars
+
+    OR
+
+    just define the artifact namespace as follows:
+
+      xmlns:artifact="antlib:org.apache.maven.artifact.ant"
+
+    and be sure to add the maven-artifact-ant jars to the ant
+    classpath (either by setting the CLASSPATH environment variable
+    before calling ant, or place the jars in the $ANT_HOME/lib directory).
+
+
+    REQUIRED SETUP FOR RUNNING DEPLOYMENT TESTS
+
+    Some of the deploy tests require that you have the ssh daemon (sshd) running
+    on your local system.  This allows the deploy taks to scp artifacts to a local
+    test repository.
+
+    How you start sshd will depend on your system.  For example on Fedora Linux,
+    you can start the ssh deamon using "service sshd start"
+
+  -->
+
+  <target name="initClassloader">
+    <path id="testclasspath" path="target/test-classes" />
+    <typedef resource="test-tasks.xml" uri="urn:test-tasks" classpathref="testclasspath"/>
+
+    <test:classloader set="classloader"/>
+  </target>
+
+  <target name="checkClassloader">
+    <test:classloader check="classloader"/>
+  </target>
+
+  <target name="initTaskDefs" depends="initClassloader">
+    <xmlproperty file="pom.xml" prefix="pom.xml" />
+
+    <path id="maven-ant-tasks.classpath" path="target/maven-ant-tasks-${pom.xml.project.version}.jar" />
+    <typedef resource="org/apache/maven/artifact/ant/antlib.xml" uri="urn:maven-artifact-ant"
+             classpathref="maven-ant-tasks.classpath"/>
+
+    <artifact:localRepository id="local.repository" path="${basedir}/target/local-repo" layout="default"/>
+
+    <property name="deploy.repository.url" value="${basedir}/target/deployment-repo" />
+    <artifact:remoteRepository id="deploy.repository" url="file://localhost/${deploy.repository.url}" layout="default"/>
+
+    <artifact:pom file="pom.xml" id="maven.project"/>
+
+    <test:classloader check="classloader"/>
+  </target>
+
+  <target name="installSshProvider" depends="initTaskDefs">
+    <artifact:install-provider artifactId="wagon-ssh" version="1.0-beta-2"/>
+  </target>
+
+  <target name="test-all-deps" description="All dependencies tests"
+    depends="test-pom, test-pom-profiles, test-pom-with-parent,test-no-deps,test-pom-deps,
+             test-deps-two-repos,test-deps,test-deps-mirror,test-deps-order,
+             test-deps-sources,test-deps-sources-empty,test-deps-profile,test-deps-scopes,test-system-scope,
+             test-bad-scope">
+    <echo>Some tests must be run manually, since they are intended to fail:
+- test-bad-dep
+- test-invalid-pom-ref
+- test-bad-system-dep
+- test-bad-repo-refid
+    </echo>
+  </target>
+
+  <target name="test-all-pubs" description="All publication tests (install/deploy)"
+    depends="test-deploy-spaces,test-deploy,test-no-dist-mgmt,test-install-attached,test-deploy-attached"/>
+
+  <target name="test-all" description="All tests"
+    depends="test-all-deps,test-all-pubs,test-install-provider,checkClassloader,test-mvn">
+    <echo>Tests completed successfully.</echo>
+    <echo>test-scm not run, since it fails...</echo>
+  </target>
+
+  <target name="test-no-deps" depends="initTaskDefs">
+    <artifact:dependencies filesetId="runtime.fileset" pathId="empty.dependency.classpath">
+    </artifact:dependencies>
+    <copy todir="target/test-no-deps" verbose="true">
+      <fileset refid="runtime.fileset"/>
+    </copy>
+    <property name="empty.property" refid="empty.dependency.classpath"/>
+  </target>
+
+  <target name="test-empty-settings" depends="initTaskDefs">
+    <artifact:dependencies filesetId="runtime.fileset" settingsFile="${basedir}/src/test/settings-empty.xml">
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-bad-dep" depends="initTaskDefs">
+    <echo>Expected failure because foo:foo:jar:1.0-alpha-2 artifact does not exist.</echo>
+    <artifact:dependencies pathId="dependency.classpath" filesetId="dependency.fileset">
+      <dependency groupId="foo" artifactId="foo" version="1.0-alpha-2"/>
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-bad-scope" depends="initTaskDefs">
+    <echo>Expected warning because 'bad-value' is not a valid scope. Error message must show official scopes. See MANTTASKS-190 for more information.</echo>
+    <artifact:dependencies>
+      <dependency groupId="commons-logging" artifactId="commons-logging" version="1.1.1" scope="bad-value"/>
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-pom" depends="initTaskDefs">
+    <artifact:pom file="pom.xml" id="my.maven.project"/>
+
+    <echo>Artifact ID = ${my.maven.project.artifactId}</echo>
+
+    <echo>Parent Artifact ID = ${my.maven.project.parent.artifactId}</echo>
+
+    <fail message="failed to get pom info ${my.maven.project.artifactId}">
+      <condition>
+        <not><equals arg1="${my.maven.project.artifactId}" arg2="${pom.xml.project.artifactId}"/></not>
+      </condition>
+    </fail>
+
+    <echo>Maven Core Version = ${my.maven.project.properties.mavenVersion}</echo>
+
+    <fail message="failed to get pom properties ${my.maven.project.properties.mavenVersion}">
+      <condition>
+        <not><equals arg1="${my.maven.project.properties.mavenVersion}" arg2="${pom.xml.project.properties.mavenVersion}"/></not>
+      </condition>
+    </fail>
+
+    <echo>project.build.directory = ${my.maven.project.build.directory}</echo>
+
+    <fail message="failed to get basedir">
+      <condition>
+        <contains string="${my.maven.project.build.directory}" substring="{"/>
+      </condition>
+    </fail>
+  </target>
+
+  <target name="test-pom-profiles" depends="initTaskDefs">
+
+    <!-- Test default profile activation -->
+    <artifact:pom file="src/test/pom-with-profiles.xml" id="project.default"/>
+
+    <echo>Current profile = ${project.default.build.finalName}</echo>
+
+    <fail message="failed to activate profile default">
+      <condition>
+        <not><equals arg1="${project.default.build.finalName}" arg2="default"/></not>
+      </condition>
+    </fail>
+
+    <!-- Test explicit profile activation -->
+    <artifact:pom file="src/test/pom-with-profiles.xml" id="project.myprofile1" >
+      <profile id="myprofile1"/>
+    </artifact:pom>
+
+    <echo>Current profile = ${project.myprofile1.build.finalName}</echo>
+
+    <fail message="failed to activate profile myprofile1">
+      <condition>
+        <not><equals arg1="${project.myprofile1.build.finalName}" arg2="myprofile1"/></not>
+      </condition>
+    </fail>
+
+    <!-- Test explicit profile activation with "active" attr set -->
+    <artifact:pom file="src/test/pom-with-profiles.xml" id="project.myprofile2" >
+      <profile id="myprofile2" active="true"/>
+    </artifact:pom>
+
+    <echo>Current profile = ${project.myprofile2.build.finalName}</echo>
+
+    <fail message="failed to activate profile myprofile2">
+      <condition>
+        <not><equals arg1="${project.myprofile2.build.finalName}" arg2="myprofile2"/></not>
+      </condition>
+    </fail>
+
+    <!-- Test explicit profile deactivation -->
+    <artifact:pom file="src/test/pom-with-profiles.xml" id="project.noprofile" >
+      <profile id="default" active="false" />
+    </artifact:pom>
+
+    <echo>Current profile = ${project.noprofile.build.finalName}</echo>
+
+    <fail message="failed to deactivate default profile">
+      <condition>
+        <not><equals arg1="${project.noprofile.build.finalName}" arg2="noprofile"/></not>
+      </condition>
+    </fail>
+  </target>
+
+  <target name="test-legacy-pom" depends="initTaskDefs">
+    <!-- NOTE: The legacy layout is problematic when used in an environment with a repo man -->
+    <artifact:dependencies>
+      <dependency groupId="geronimo-spec" artifactId="geronimo-spec-javamail" version="1.3.1-rc5" />
+      <localRepository path="${basedir}/target/local-repo-legacy" />
+      <remoteRepository url="http://repo1.maven.org/maven" layout="legacy" id="central" />
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-deps" depends="initTaskDefs">
+    <artifact:dependencies pathId="dependency.classpath" filesetId="dependency.fileset"
+                           verbose="true" versionsId="dependency.versions">
+      <dependency groupId="org.apache.maven.wagon" artifactId="wagon-provider-test" version="1.0-alpha-4">
+        <exclusion groupId="junit" artifactId="junit"/>
+      </dependency>
+      <dependency groupId="org.apache.maven" artifactId="maven-core-it-support-old-location" version="1.1"/>
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueTrue" version="2.0.7-SNAPSHOT"/>
+      <localRepository refid="local.repository"/>
+      <remoteRepository url="http://repo1.maven.org/maven2" id="central" />
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo">
+        <snapshots enabled="true"/>
+        <releases enabled="false"/>
+      </remoteRepository>
+    </artifact:dependencies>
+
+    <copy todir="target/files/binaries">
+      <fileset refid="dependency.fileset"/>
+    </copy>
+    <!-- excluded dependency junit:junit -->
+    <check.file.not.exists file="target/files/binaries/junit/junit" type="dir"/>
+    <!-- SNAPSHOT dependency it.ant-tasks:snapshotUniqueFalse:2.0.7-SNAPSHOT -->
+    <check.file.exists file="target/files/binaries/it/ant-tasks/snapshotUniqueFalse" type="dir"/>
+    <!-- MANTTASKS-18: SNAPSHOT dependency it.ant-tasks:snapshotUniqueTrue:2.0.7-SNAPSHOT -->
+    <check.file.exists file="target/files/binaries/it/ant-tasks/snapshotUniqueTrue" type="dir"/>
+
+    <!-- MANTTASKS-84 -->
+    <copy todir="target/files/versionMapperFlatten">
+      <fileset refid="dependency.fileset"/>
+      <mapper classpathref="maven-ant-tasks.classpath" classname="org.apache.maven.artifact.ant.VersionMapper"
+              from="${dependency.versions}" to="flatten" />
+    </copy>
+    <!-- VersionMapper to="flatten" on SNAPSHOT -->
+    <check.file.not.exists file="target/files/versionMapperFlatten/it" type="dir"/>
+
+    <!-- MANTTASKS-33: property it.ant-tasks:snapshotUniqueFalse:jar should point to an existing file -->
+    <check.file.exists file="${it.ant-tasks:snapshotUniqueTrue:jar}"/>
+  </target>
+
+  <target name="test-pom-deps" depends="initTaskDefs">
+    <artifact:dependencies filesetId="maven-ant-tasks.dependency.fileset">
+      <pom refid="maven.project"/>
+    </artifact:dependencies>
+
+    <copy todir="target/maven-ant-tasks-dependencies">
+      <fileset refid="maven-ant-tasks.dependency.fileset"/>
+    </copy>
+
+    <artifact:dependencies filesetId="maven-ant-tasks.compile.dependency.fileset" versionsId="maven-ant-tasks.compile.dependency.versions" useScope="compile">
+      <pom refid="maven.project"/>
+    </artifact:dependencies>
+    <echo>dependencies versions: ${maven-ant-tasks.compile.dependency.versions}</echo>
+
+    <copy todir="target/maven-ant-tasks-compile-dependencies/fileset">
+      <fileset refid="maven-ant-tasks.compile.dependency.fileset"/>
+    </copy>
+
+    <copy todir="target/maven-ant-tasks-compile-dependencies/versionMapper">
+      <fileset refid="maven-ant-tasks.compile.dependency.fileset"/>
+      <mapper classpathref="maven-ant-tasks.classpath" classname="org.apache.maven.artifact.ant.VersionMapper"
+              from="${maven-ant-tasks.compile.dependency.versions}" />
+    </copy>
+
+    <copy todir="target/maven-ant-tasks-compile-dependencies/versionMapperFlatten">
+      <fileset refid="maven-ant-tasks.compile.dependency.fileset"/>
+      <mapper classpathref="maven-ant-tasks.classpath" classname="org.apache.maven.artifact.ant.VersionMapper"
+              from="${maven-ant-tasks.compile.dependency.versions}" to="flatten" />
+    </copy>
+
+    <copy todir="target/maven-ant-tasks-compile-dependencies/WEB-INF/lib">
+      <fileset refid="maven-ant-tasks.compile.dependency.fileset"/>
+      <mapper type="flatten"/>
+    </copy>
+  </target>
+
+  <target name="test-deps-mirror" depends="initTaskDefs">
+    <delete dir="${basedir}/target/tmp"/>
+    <!-- the remoteRepository specified doesn't really exist, but settings declares an existing mirror -->
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-mirror.xml">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <localRepository path="${basedir}/target/tmp"/>
+      <remoteRepository url="file://${basedir}/target/fake/repository" id="fake-repository" />
+    </artifact:dependencies>
+
+    <delete dir="${basedir}/target/tmp"/>
+    <!-- the remoteRepository specified doesn't really exist, but settings declares an existing mirror for * -->
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-mirror-wildcard.xml">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <localRepository path="${basedir}/target/tmp"/>
+      <remoteRepository url="file://${basedir}/target/fake/repository" id="any" />
+    </artifact:dependencies>
+
+    <!-- MANTTASKS-141 -->
+    <delete dir="${basedir}/target/tmp"/>
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-mirror-complex.xml">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueTrue" version="2.0.8-SNAPSHOT"/>
+      <localRepository path="${basedir}/target/tmp"/>
+      <remoteRepository url="file://${basedir}/target/fake/repository" id="test" />
+    </artifact:dependencies>
+    <check.file.not.exists file="target/tmp/it/ant-tasks/snapshotUniqueTrue/2.0.8-SNAPSHOT/maven-metadata-test.xml" type="file"/>
+    <check.file.exists file="target/tmp/it/ant-tasks/snapshotUniqueTrue/2.0.8-SNAPSHOT/maven-metadata-mirror-cd.xml" type="file"/>
+
+    <!-- MANTTASKS-141 -->
+    <delete dir="${basedir}/target/tmp"/>
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-mirror-complex.xml">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <localRepository path="${basedir}/target/tmp"/>
+      <remoteRepository url="file://${basedir}/target/fake/repository" id="yat" />
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-deps-two-repos" depends="initTaskDefs">
+    <delete dir="target/tmp"/>
+    <!-- MANTTASKS-78 -->
+    <artifact:dependencies verbose="true">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <localRepository path="target/tmp"/>
+      <remoteRepository url="file://${user.dir}/src/test/repo"/>  <!-- intentionnally left without id -->
+      <remoteRepository url="file://${user.dir}/target/tmp/fake"/><!-- intentionnally left without id -->
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-deps-repo-override" depends="initTaskDefs">
+    <echo>Expected failure: central has been overrided.</echo>
+    <delete dir="target/tmp"/>
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-empty.xml">
+      <localRepository path="target/tmp"/>
+      <remoteRepository id="central" url="file://${user.dir}/src/test/repo"/>
+      <dependency groupId="commons-logging" artifactId="commons-logging" version="1.1.1"/>
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-deps-order" depends="initTaskDefs">
+    <artifact:dependencies pathId="order.path">
+      <dependency groupId="junit" artifactId="junit" version="3.8.1"/>
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <localRepository refid="local.repository"/>
+      <remoteRepository url="http://repo1.maven.org/maven2" id="central" />
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo">
+        <snapshots enabled="true"/>
+        <releases enabled="false"/>
+      </remoteRepository>
+    </artifact:dependencies>
+
+    <pathconvert property="order.property" targetos="unix" refid="order.path">
+      <mapper type="flatten"/>
+    </pathconvert>
+    <condition property="order.ok">
+      <equals arg1="${order.property}" arg2="junit-3.8.1.jar:snapshotUniqueFalse-2.0.7-SNAPSHOT.jar"/>
+    </condition>
+    <fail unless="order.ok">dependencies junit then it.ant-tasks should be preserved in path: ${order.property}</fail>
+
+    <artifact:dependencies pathId="reverse.order.path">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <dependency groupId="junit" artifactId="junit" version="3.8.1"/>
+      <localRepository refid="local.repository"/>
+      <remoteRepository url="http://repo1.maven.org/maven2" id="central" />
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo">
+        <snapshots enabled="true"/>
+        <releases enabled="false"/>
+      </remoteRepository>
+    </artifact:dependencies>
+
+    <pathconvert property="reverse.order.property" targetos="unix" refid="reverse.order.path">
+      <mapper type="flatten"/>
+    </pathconvert>
+    <condition property="reverse.order.ok">
+      <equals arg1="${reverse.order.property}" arg2="snapshotUniqueFalse-2.0.7-SNAPSHOT.jar:junit-3.8.1.jar"/>
+    </condition>
+    <fail unless="reverse.order.ok">dependencies junit then it.ant-tasks should be preserved in path: ${reverse.order.property}</fail>
+
+    <artifact:pom file="src/test/pom-order.xml" id="order.project"/>
+    <artifact:dependencies pathId="pom.order.path" verbose="true">
+      <pom refid="order.project"/>
+    </artifact:dependencies>
+    <pathconvert property="pom.order.property" targetos="unix" refid="pom.order.path">
+      <mapper type="flatten"/>
+    </pathconvert>
+    <condition property="pom.order.ok">
+      <equals arg1="${pom.order.property}" arg2="commons-io-1.3.2.jar:commons-lang-2.3.jar:commons-logging-1.1.1.jar:commons-collections-3.2.jar"/>
+    </condition>
+    <fail unless="pom.order.ok">order of dependencies defined in pom should be preserved in path: ${pom.order.property}</fail>
+  </target>
+
+  <target name="test-deps-sources" depends="initTaskDefs">
+    <artifact:dependencies filesetId="jar.fileset" sourcesFilesetId="sources.fileset" javadocFilesetId="javadoc.fileset">
+      <dependency groupId="it.ant-tasks" artifactId="release" version="2.0.7"/>
+      <localRepository refid="local.repository"/>
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo">
+        <snapshots enabled="false"/>
+        <releases enabled="true"/>
+      </remoteRepository>
+    </artifact:dependencies>
+
+    <delete dir="${basedir}/target/files/sources"/>
+    <copy todir="${basedir}/target/files/sources">
+      <fileset refid="sources.fileset"/>
+      <mapper type="flatten"/>
+    </copy>
+    <!-- release sources -->
+    <check.file.exists file="${basedir}/target/files/sources/release-2.0.7-sources.jar"/>
+    <!-- property it.ant-tasks:release:java-source:sources should point to an existing file in local repo -->
+    <check.file.exists file="${it.ant-tasks:release:java-source:sources}"/>
+
+    <delete dir="${basedir}/target/files/javadoc"/>
+    <copy todir="${basedir}/target/files/javadoc">
+      <fileset refid="javadoc.fileset"/>
+      <mapper type="flatten"/>
+    </copy>
+
+    <!-- release javadoc -->
+    <check.file.exists file="${basedir}/target/files/javadoc/release-2.0.7-javadoc.jar"/>
+    <!-- property it.ant-tasks:release:java-source:javadoc should point to an existing file in local repo -->
+    <check.file.exists file="${it.ant-tasks:release:java-source:javadoc}"/>
+  </target>
+
+  <target name="test-deps-sources-empty" depends="initTaskDefs">
+    <artifact:dependencies sourcesFilesetId="sources.fileset" javadocFilesetId="javadoc.fileset">
+      <dependency groupId="it.ant-tasks" artifactId="snapshotUniqueFalse" version="2.0.7-SNAPSHOT"/>
+      <localRepository refid="local.repository"/>
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo">
+        <snapshots enabled="true"/>
+        <releases enabled="false"/>
+      </remoteRepository>
+    </artifact:dependencies>
+
+    <delete dir="${basedir}/target/files/empty"/>
+    <copy todir="${basedir}/target/files/empty">
+      <fileset refid="sources.fileset"/>
+      <mapper type="merge" to="sources.bin"/>
+    </copy>
+    <copy todir="${basedir}/target/files/empty">
+      <fileset refid="javadoc.fileset"/>
+      <mapper type="merge" to="javadoc.bin"/>
+    </copy>
+
+    <!-- no dependencies sources -->
+    <check.file.not.exists file="${basedir}/target/files/empty/sources.bin"/>
+
+    <!-- no dependencies javadoc -->
+    <check.file.not.exists file="${basedir}/target/files/empty/javadoc.bin"/>
+  </target>
+
+  <target name="test-deps-profile" depends="initTaskDefs">
+    <delete dir="${basedir}/target/tmp"/>
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-profile-default.xml">
+      <dependency groupId="it.ant-tasks" artifactId="release" version="2.0.7"/>
+      <localRepository path="${basedir}/target/tmp"/>
+    </artifact:dependencies>
+
+    <delete dir="${basedir}/target/tmp"/>
+    <artifact:dependencies settingsFile="${basedir}/src/test/settings-profile-file.xml">
+      <dependency groupId="it.ant-tasks" artifactId="release" version="2.0.7"/>
+      <localRepository path="${basedir}/target/tmp"/>
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-deploy-spaces" depends="initTaskDefs,installSshProvider">
+    <delete file="${basedir}/target/local-repo/org/apache/maven/maven-ant-tasks/maven-metadata-remote.*"/>
+    <echo file="target/test file.txt">dummy</echo>
+    <artifact:deploy file="target/test file.txt">
+      <!-- intentionnally left without id to check default id: see MANTTASKS-103 -->
+      <remoteRepository url="scp://localhost/tmp/deployment-repo"/>
+      <localrepository refid="local.repository"/>
+      <pom refid="maven.project"/>
+    </artifact:deploy>
+
+    <!-- MANTTASKS-103: maven-metadata-scp: should not exist since scp: is an illegal remoteRepository id
+      replaced instead by "remote" id in DeployTask.java
+    -->
+    <check.file.not.exists file="${basedir}/target/local-repo/org/apache/maven/maven-ant-tasks/maven-metadata-scp://localhost"/>
+    <check.file.exists file="${basedir}/target/local-repo/org/apache/maven/maven-ant-tasks/maven-metadata-remote.xml"/>
+  </target>
+
+  <target name="test-deploy" depends="initTaskDefs,installSshProvider">
+    <property name="outJar" value="${basedir}/build-tests.xml"/>
+    <property name="targetDir" value="${deploy.repository.url}/org/apache/maven/test/sample-build-test/2.0-beta-4-SNAPSHOT"/>
+    <delete dir="${deploy.repository.url}"/>
+
+    <artifact:install file="${outJar}">
+      <pom file="src/test/simple-pom.xml"/>
+    </artifact:install>
+
+    <artifact:deploy file="${outJar}">
+      <remoteSnapshotRepository refid="deploy.repository"/>
+      <pom file="src/test/simple-pom.xml"/>
+    </artifact:deploy>
+    <!-- deployment in ${deploy.repository.url} should have created a directory -->
+    <check.file.exists file="${targetDir}" type="dir"/>
+    <!-- uniqueVersion="true" by default: file -SNAPSHOT.jar should not exist -->
+    <check.file.not.exists file="${targetDir}/sample-build-test-2.0-beta-4-SNAPSHOT.jar"/>
+
+    <artifact:deploy file="${outJar}" uniqueVersion="false">
+      <remoteSnapshotRepository refid="deploy.repository"/>
+      <pom file="src/test/simple-pom.xml"/>
+    </artifact:deploy>
+    <!-- when uniqueVersion="false", file -SNAPSHOT.jar should be created -->
+    <check.file.exists file="${targetDir}/sample-build-test-2.0-beta-4-SNAPSHOT.jar"/>
+
+    <!-- test deploy to scp repository -->
+    <artifact:deploy file="${outJar}">
+      <remoteRepository url="scp://localhost/tmp/deployment-repo" id="scp.localhost.repo">
+        <authentication username="${user.name}" privateKey="${user.home}/.ssh/id_dsa"/>
+      </remoteRepository>
+      <pom file="src/test/simple-pom.xml"/>
+    </artifact:deploy>
+  </target>
+
+  <target name="test-scm" depends="initTaskDefs">
+    <echo>Testing SCM Wagon</echo>
+    <mkdir dir="target"/>
+
+    <pathconvert targetos="unix" property="repo.path.unix">
+      <map from="c:" to=""/>
+      <path>
+        <pathelement location="${basedir}/target/deployment-repo-scm"/>
+      </path>
+    </pathconvert>
+
+    <property name="scm.url" value="file://${repo.path.unix}"/>
+
+    <delete dir="${repo.path.unix}"/>
+
+    <exec executable="svnadmin" failonerror="true">
+      <arg line="create ${repo.path.unix}"/>
+    </exec>
+
+    <artifact:localRepository id="local.repository" path="${basedir}/target/local-repo" layout="default"/>
+
+    <artifact:remoteRepository id="deploy.repository" url="scm:svn:${scm.url}" layout="default"/>
+
+    <artifact:dependencies pathId="dependency.classpath">
+      <dependency groupId="org.apache.maven.wagon" artifactId="wagon-provider-test" version="1.0-alpha-4"/>
+      <dependency groupId="org.apache.maven.archiva" artifactId="archiva-configuration" version="1.0-SNAPSHOT"/>
+      <localRepository refid="local.repository"/>
+    </artifact:dependencies>
+
+    <exec executable="svn" dir="${basedir}/target/local-repo" failonerror="true">
+      <arg line="import -m 'import' ${scm.url}"/>
+    </exec>
+
+    <delete dir="${basedir}/target/local-repo-scm"/>
+
+    <!-- Could the SCM provider initialise this? -->
+    <exec executable="svn" dir="${basedir}/target" failonerror="true">
+      <arg line="co ${scm.url} -N local-repo-scm"/>
+    </exec>
+
+    <artifact:localRepository id="local.repository.scm" path="${basedir}/target/local-repo-scm" layout="default"/>
+
+    <artifact:dependencies pathId="dependency.classpath.scm">
+      <dependency groupId="org.apache.maven.wagon" artifactId="wagon-provider-test" version="1.0-alpha-4"/>
+      <dependency groupId="org.apache.maven.archiva" artifactId="archiva-configuration" version="1.0-SNAPSHOT"/>
+      <localRepository refid="local.repository.scm"/>
+      <remoteRepository refid="deploy.repository"/>
+    </artifact:dependencies>
+
+    <property name="outJar" value="${maven.project.build.directory}/${maven.project.build.finalName}.jar"/>
+    <artifact:deploy file="${outJar}">
+      <localRepository refid="local.repository.scm"/>
+      <remoteRepository refid="deploy.repository"/>
+      <pom refid="maven.project"/>
+    </artifact:deploy>
+  </target>
+
+  <target name="test-invalid-pom-ref" depends="initTaskDefs">
+    <artifact:dependencies>
+      <pom refid="invalid-ref" />
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-no-dist-mgmt" depends="initTaskDefs">
+    <artifact:deploy file="src/test/simple-pom.xml">
+      <pom file="src/test/simple-pom.xml" />
+      <remoteRepository refid="deploy.repository" />
+    </artifact:deploy>
+  </target>
+
+  <target name="test-deploy-attached" depends="initTaskDefs">
+    <echo message="test" file="${basedir}/target/sample-build-test.pom.asc"/>
+
+    <artifact:deploy file="src/test/simple-pom.xml">
+      <pom file="src/test/simple-pom.xml" />
+      <remoteRepository refid="deploy.repository" />
+      <attach file="${basedir}/target/sample-build-test.pom.asc" type="pom.asc"/>
+    </artifact:deploy>
+  </target>
+
+  <target name="test-install-attached" depends="initTaskDefs">
+    <echo message="test" file="${basedir}/target/sample-build-test.pom.asc"/>
+
+    <artifact:install file="src/test/simple-pom.xml">
+      <pom file="src/test/simple-pom.xml" />
+      <localRepository refid="local.repository"/>
+      <attach file="${basedir}/target/sample-build-test.pom.asc" type="pom.asc"/>
+    </artifact:install>
+  </target>
+
+  <target name="test-install-provider" depends="initTaskDefs">
+    <artifact:install-provider groupId="it.ant-tasks" artifactId="wagon-foo" version="1.0-beta-2">
+      <localRepository refid="local.repository"/>
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo"/>
+    </artifact:install-provider>
+  </target>
+
+  <target name="test-pom-with-parent" depends="initTaskDefs">
+    <delete dir="${basedir}/target/tmp"/>
+    <artifact:pom file="${user.dir}/src/test/pom-with-parent.xml" id="my.maven.project">
+      <localRepository path="${basedir}/target/tmp"/>
+      <remoteRepository url="file://${user.dir}/src/test/repo" id="test.repo"/>
+    </artifact:pom>
+    <check.file.exists file="${basedir}/target/tmp/it/ant-tasks/pom/1.0/pom-1.0.pom" type="file"/>
+
+    <echo>Artifact ID = ${my.maven.project.artifactId}</echo>
+
+    <echo>Parent Artifact ID = ${my.maven.project.parent.artifactId}</echo>
+
+    <!-- MANTTASKS-107 repository defined in pom must be used to download parent pom -->
+    <delete dir="${basedir}/target/tmp"/>
+    <artifact:pom file="${user.dir}/src/test/pom-with-parent2.xml" id="my.maven.project2">
+      <localRepository path="${basedir}/target/tmp"/>
+    </artifact:pom>
+    <check.file.exists file="${basedir}/target/tmp/it/ant-tasks/pom/1.1/pom-1.1.pom" type="file"/>
+  </target>
+
+  <target name="test-mvn" depends="initTaskDefs">
+    <artifact:mvn pom="src/test/pom.xml" mavenVersion="2.1.0" fork="true">
+      <arg value="test"/>
+      <localRepository path="${basedir}/target/tmp"/>
+    </artifact:mvn>
+  </target>
+
+  <target name="test-deps-scopes" depends="initTaskDefs">
+    <artifact:dependencies filesetId="dependency.scopes.fileset" scopes=" provided , test ">
+      <pom file="src/test/pom-with-scopes.xml"/>
+    </artifact:dependencies>
+
+    <delete dir="target/files/scopes-test"/>
+    <mkdir dir="target/files/scopes-test"/>
+    <copy todir="target/files/scopes-test">
+      <fileset refid="dependency.scopes.fileset"/>
+    </copy>
+
+    <!-- excluded dependency junit:junit -->
+    <check.file.exists file="target/files/scopes-test/commons-lang/commons-lang" type="dir"/>
+    <check.file.exists file="target/files/scopes-test/commons-collections/commons-collections" type="dir"/>
+    <check.file.not.exists file="target/files/scopes-test/org/apache/commons/commons-io" type="dir"/>
+    <check.file.not.exists file="target/files/scopes-test/commons-logging/commons-logging" type="dir"/>
+  </target>
+
+  <target name="test-system-scope" depends="initTaskDefs">
+    <artifact:dependencies pathId="system.scope.classpath" filesetId="system.scope.fileset" useScope="compile">
+      <pom file="src/test/pom-with-system-scope.xml" />
+      <localRepository refid="local.repository"/>
+    </artifact:dependencies>
+
+    <pathconvert property="system.scope.classpath.property" targetos="unix" refid="system.scope.classpath"/>
+    <path id="local.repository.path" path="${basedir}/target/local-repo" />
+    <pathconvert property="local.repository.property" targetos="unix" refid="local.repository.path"/>
+
+    <echo message="${sun.jdk:tools:jar}"/>
+    <echo>
+      classpath: ${system.scope.classpath.property}
+    </echo>
+
+    <condition property="test.fail">
+      <length string="${system.scope.classpath.property}" trim="true" length="0" />
+    </condition>
+    <fail if="test.fail">Artifact with system scope should be added to classpath.</fail>
+
+    <condition property="test.fail">
+      <contains string="${system.scope.classpath.property}" substring="${local.repository.property}"/>
+    </condition>
+    <fail if="test.fail">For system scope path should not come from local repository.</fail>
+  </target>
+
+  <target name="test-bad-system-dep" depends="initTaskDefs">
+    <echo>Expected failure: dependency with scope="system" must define systemPath attribute</echo>
+    <artifact:dependencies>
+      <dependency groupId="foo" artifactId="bar" version="1.0" scope="system"/>
+      <localRepository refid="local.repository"/>
+    </artifact:dependencies>
+  </target>
+
+  <target name="test-bad-repo-refid" depends="initTaskDefs">
+    <echo>Expected failure: undefined remoteRepository refid</echo>
+    <artifact:dependencies>
+      <remoteRepository refid="not-defined"/>
+      <dependency groupId="commons-logging" artifactId="commons-logging" version="1.1.1"/>
+    </artifact:dependencies>
+  </target>
+
+  <macrodef name="check.file.exists">
+    <attribute name="file"/>
+    <attribute name="type" default="file"/>
+    <sequential>
+      <echo>Checking for existence of @{type}: @{file}</echo>
+      <fail message="Unable to find a required @{type}: @{file}">
+        <condition>
+          <not>
+            <available file="@{file}" type="@{type}"/>
+          </not>
+        </condition>
+      </fail>
+    </sequential>
+  </macrodef>
+
+  <macrodef name="check.file.not.exists">
+    <attribute name="file"/>
+    <attribute name="type" default="file"/>
+    <sequential>
+      <echo>Checking for non-existence of @{type}: @{file}</echo>
+      <fail message="Found a @{type} that was not supposed to exist: @{file}">
+        <condition>
+          <available file="@{file}" type="@{type}"/>
+        </condition>
+      </fail>
+    </sequential>
+  </macrodef>
+</project>
