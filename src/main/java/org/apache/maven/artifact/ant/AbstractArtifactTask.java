@@ -298,6 +298,10 @@ public abstract class AbstractArtifactTask
         {
             wagonManager.setOnline( true );
         }
+        for(Mirror mirror: settings.getMirrors()) {
+            wagonManager.addMirror(mirror.getId(), mirror.getMirrorOf(),
+                    mirror.getUrl());
+        }
     }
 
     private Settings loadSettings( File settingsFile )
